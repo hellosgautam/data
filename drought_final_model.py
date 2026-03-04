@@ -9,21 +9,13 @@ import matplotlib.pyplot as plt
 import tensorflow as pd_tf
 import tensorflow.keras as keras
 from tensorflow.keras.models import Sequential, Model
-from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, MultiHeadAttention, LayerNormalization, Flatten, GlobalAveragePooling1D
+from tensorflow.keras.layers import LSTM, Dense, Input, Dropout, MultiHeadAttention, LayerNormalization, GlobalAveragePooling1D
+import warnings
+warnings.filterwarnings('ignore')
 
 # Set random seed for reproducibility
 np.random.seed(42)
 pd_tf.random.set_seed(42)
-
-def calculate_spei(df, window):
-    rolling_sum = df['WB'].rolling(window=window).sum()
-    # Simple standardization (z-score) as requested
-    # Note: Traditional SPEI uses a distribution fitting (e.g., Log-Logistic),
-    # but the instructions specify: "standardize these sums (z-score)"
-    mean = rolling_sum.mean()
-    std = rolling_sum.std()
-    spei = (rolling_sum - mean) / std
-    return spei
 
 def create_dataset(X, y, time_steps=1):
     Xs, ys = [], []
@@ -35,59 +27,76 @@ def create_dataset(X, y, time_steps=1):
 
 def load_and_process_data(data_dir='data'):
     all_files = glob.glob(os.path.join(data_dir, "*.csv"))
-
     processed_dfs = []
+
+    spei_windows = [1, 6, 9, 12]
+    lead_times = [30, 60, 90]
 
     for filename in all_files:
         station_name = os.path.splitext(os.path.basename(filename))[0]
         df = pd.read_csv(filename)
-
-        # Calculate SPEI-3, SPEI-6, SPEI-12
-        df['SPEI-3'] = calculate_spei(df, 3)
-        df['SPEI-6'] = calculate_spei(df, 6)
-        df['SPEI-12'] = calculate_spei(df, 12)
-
-        # Add Station name for identification
         df['Station'] = station_name
 
-        # Drop NaNs created by rolling windows
-        df = df.dropna()
+        # Ensure only fully populated rows are kept.
+        cols_to_check = ['Precipitation', 'Tmean', 'PET']
+        for window in spei_windows:
+            cols_to_check.append(f'SPEI-{window}')
+            for lead in lead_times:
+                cols_to_check.append(f'SPEI-{window}_lead{lead}')
 
-        processed_dfs.append(df)
+        # Only keep rows where all these columns have values
+        available_cols = [c for c in cols_to_check if c in df.columns]
+        df = df.dropna(subset=available_cols)
+
+        if len(df) > 0:
+            processed_dfs.append(df)
+        else:
+            print(f"Warning: Station {station_name} has 0 samples after processing. Skipping.")
 
     return processed_dfs
 
-def split_data(station_dfs, features, target, window_size=12):
+def evaluate_metrics(y_true, y_pred):
+    r2 = r2_score(y_true, y_pred)
+    mae = mean_absolute_error(y_true, y_pred)
+    mse = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+
+    # RRMSE
+    mean_true = np.mean(y_true)
+    if mean_true != 0:
+        rrmse = (rmse / np.abs(mean_true)) * 100
+    else:
+        rrmse = np.nan
+
+    return r2, mae, mse, rmse, rrmse
+
+def split_and_scale(processed_dfs, feature_cols, target_col, window_size=12):
+    # To keep track of each station's test data separately for final plotting
+    station_test_data = {}
+
+    # Fit scaler globally
+    all_train_features = []
+    for df in processed_dfs:
+        split_idx = int(len(df) * 0.8)
+        all_train_features.append(df.iloc[:split_idx][feature_cols])
+
+    global_train_df = pd.concat(all_train_features)
+    scaler = StandardScaler()
+    scaler.fit(global_train_df)
+
     train_X_list, test_X_list = [], []
     train_y_list, test_y_list = [], []
 
-    # For visualization
-    kathmandu_test_X = None
-    kathmandu_test_y = None
-    kathmandu_dates = None # To plot against time if needed, though plot vs actual is requested
-
-    for df in station_dfs:
+    for df in processed_dfs:
         station_name = df['Station'].iloc[0]
+        df_scaled = df.copy()
+        df_scaled[feature_cols] = scaler.transform(df_scaled[feature_cols])
 
-        # Sort by date if 'Date' column exists, assuming it's already sorted based on file preview
-        # df = df.sort_values('Date')
+        X = df_scaled[feature_cols]
+        y = df_scaled[target_col]
 
-        X = df[features]
-        y = df[target]
-
-        # Train/Test Split (80/20) - Time-based
-        split_idx = int(len(df) * 0.8)
-
-        # We need to be careful with windowing.
-        # If we window first, we lose some data at the beginning.
-        # If we split first, we might have data leakage or discontinuity at the split.
-        # Standard approach: Split time series, then window.
-        # However, to maximize data usage for each station:
-
-        # Create sequences
         X_seq, y_seq = create_dataset(X, y, window_size)
 
-        # Split the sequences
         split_idx_seq = int(len(X_seq) * 0.8)
 
         X_train, X_test = X_seq[:split_idx_seq], X_seq[split_idx_seq:]
@@ -98,43 +107,35 @@ def split_data(station_dfs, features, target, window_size=12):
         train_y_list.append(y_train)
         test_y_list.append(y_test)
 
-        if 'Kathmandu' in station_name: # Matches 'Kathmandu_Airport'
-            kathmandu_test_X = X_test
-            kathmandu_test_y = y_test
+        station_test_data[station_name] = {
+            'X_test': X_test,
+            'y_test': y_test
+        }
 
-
-    # Concatenate all stations
     X_train_global = np.concatenate(train_X_list, axis=0)
     X_test_global = np.concatenate(test_X_list, axis=0)
     y_train_global = np.concatenate(train_y_list, axis=0)
     y_test_global = np.concatenate(test_y_list, axis=0)
 
-    return X_train_global, X_test_global, y_train_global, y_test_global, kathmandu_test_X, kathmandu_test_y
-
-# --- Models ---
+    return X_train_global, X_test_global, y_train_global, y_test_global, station_test_data
 
 def build_lstm_model(input_shape):
-    model = Sequential()
-    model.add(LSTM(64, input_shape=input_shape, return_sequences=False))
-    model.add(Dropout(0.2))
-    model.add(Dense(32, activation='relu'))
-    model.add(Dense(1))
+    model = Sequential([
+        LSTM(64, input_shape=input_shape, return_sequences=False),
+        Dropout(0.2),
+        Dense(32, activation='relu'),
+        Dense(1)
+    ])
     model.compile(optimizer='adam', loss='mse')
     return model
 
 def build_transformer_model(input_shape):
     inputs = Input(shape=input_shape)
-
-    # Multi-Head Attention
-    # key_dim is the size of each attention head for query and key
-    x = MultiHeadAttention(num_heads=4, key_dim=input_shape[-1])(inputs, inputs)
-    x = LayerNormalization(epsilon=1e-6)(x + inputs) # Add & Norm
-
-    # Feed Forward Part
-    x = GlobalAveragePooling1D()(x) # Flatten the sequence
+    x = MultiHeadAttention(num_heads=2, key_dim=16)(inputs, inputs)
+    x = LayerNormalization(epsilon=1e-6)(x + inputs)
+    x = GlobalAveragePooling1D()(x)
     x = Dropout(0.1)(x)
-    x = Dense(64, activation="relu")(x)
-    x = Dropout(0.1)(x)
+    x = Dense(32, activation="relu")(x)
     outputs = Dense(1)(x)
 
     model = Model(inputs=inputs, outputs=outputs)
@@ -142,118 +143,116 @@ def build_transformer_model(input_shape):
     return model
 
 def main():
-    # 1. Load and Process Data
+    os.makedirs('output', exist_ok=True)
+    os.makedirs('output/plots', exist_ok=True)
+
     processed_dfs = load_and_process_data()
 
-    features = ['Precipitation', 'Tmean', 'PET', 'SPEI-3', 'SPEI-6', 'SPEI-12']
-    target = 'SPEI1_lead30'
-    window_size = 12
+    spei_windows = [1, 6, 9, 12]
+    lead_times = [30, 60, 90]
 
-    # Normalize features BEFORE splitting/windowing to ensure consistency across stations?
-    # Or normalize after?
-    # Best practice: Fit scaler on training data only.
-    # Since we are doing a global model, we should probably fit on the global training set.
-    # However, for simplicity in this workflow and since stations might have different scales (though standardized SPEI helps),
-    # let's normalize per station or globally.
-    # Given the prompt asks to "Normalize features", let's do it globally on the training set to avoid look-ahead bias,
-    # but extracting the data first requires handling the 3D structure later.
-    # A simpler approach for the 'load_and_process_data' step is to just return DFs, and we stack them to fit scaler.
+    window_size = 6 # Window size for sequences
 
-    # Let's refine the workflow:
-    # 1. Stack all data to fit scaler (on train split only ideally, but for simplicity let's do it on all non-test data or just be careful).
-    # To strictly follow "Train/Test (80/20) per station", we should fit scaler on the 80% of each station concatenated.
+    all_results = []
 
-    # Re-implementing normalization logic correctly:
-    all_data_train_list = []
-    for df in processed_dfs:
-        split_idx = int(len(df) * 0.8)
-        all_data_train_list.append(df.iloc[:split_idx][features])
+    # Process each target independently
+    for spei_win in spei_windows:
+        for lead_time in lead_times:
+            target_col = f'SPEI-{spei_win}_lead{lead_time}'
+            print(f"\n====================== Training for Target: {target_col} ======================")
 
-    global_train_df = pd.concat(all_data_train_list)
-    scaler = StandardScaler()
-    scaler.fit(global_train_df)
+            # The features will be Precipitation, Tmean, PET, and all the available calculated SPEIs
+            feature_cols = ['Precipitation', 'Tmean', 'PET'] + [f'SPEI-{w}' for w in spei_windows]
 
-    # Apply transform to all dfs
-    valid_dfs = []
-    for df in processed_dfs:
-        if len(df) > 0:
-            df[features] = scaler.transform(df[features])
-            valid_dfs.append(df)
-        else:
-            print(f"Warning: Station {df['Station'].iloc[0] if not df.empty else 'Unknown'} has 0 samples after processing.")
+            # Since some merged files might not have all columns correctly named,
+            # Let's verify feature_cols and target_col exists in the first processed_df
+            if target_col not in processed_dfs[0].columns:
+                print(f"Target column '{target_col}' not found. Skipping.")
+                continue
 
-    processed_dfs = valid_dfs
+            available_feature_cols = [c for c in feature_cols if c in processed_dfs[0].columns]
 
-    # 2. Split Data
-    X_train, X_test, y_train, y_test, kath_X, kath_y = split_data(processed_dfs, features, target, window_size)
+            X_train, X_test, y_train, y_test, station_test_data = split_and_scale(processed_dfs, available_feature_cols, target_col, window_size)
 
-    print(f"Training Data Shape: {X_train.shape}")
-    print(f"Test Data Shape: {X_test.shape}")
+            if len(X_train) == 0:
+                print(f"Not enough data to train for {target_col}.")
+                continue
 
-    # 3. Model A: Random Forest
-    # RF needs 2D input (samples, features*window) or just (samples, features) if not using window.
-    # The prompt implies comparing models, and usually RF uses the same features.
-    # If we use the windowed data, we flatten it.
-    X_train_flat = X_train.reshape(X_train.shape[0], -1)
-    X_test_flat = X_test.reshape(X_test.shape[0], -1)
-    kath_X_flat = kath_X.reshape(kath_X.shape[0], -1)
+            # 1. Random Forest
+            print(f"Training Random Forest...")
+            X_train_flat = X_train.reshape(X_train.shape[0], -1)
+            rf_model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+            rf_model.fit(X_train_flat, y_train)
 
-    print("Training Random Forest...")
-    rf_model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    rf_model.fit(X_train_flat, y_train)
-    y_pred_rf = rf_model.predict(X_test_flat)
+            # 2. LSTM
+            print(f"Training LSTM...")
+            lstm_model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
+            lstm_model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0, validation_split=0.1)
 
-    # 4. Model B: LSTM
-    print("Training LSTM...")
-    lstm_model = build_lstm_model((X_train.shape[1], X_train.shape[2]))
-    lstm_model.fit(X_train, y_train, epochs=20, batch_size=32, validation_split=0.1, verbose=1)
-    y_pred_lstm = lstm_model.predict(X_test).flatten()
+            # 3. Transformer
+            print(f"Training Transformer...")
+            transformer_model = build_transformer_model((X_train.shape[1], X_train.shape[2]))
+            transformer_model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0, validation_split=0.1)
 
-    # 5. Model C: Transformer
-    print("Training Transformer...")
-    transformer_model = build_transformer_model((X_train.shape[1], X_train.shape[2]))
-    transformer_model.fit(X_train, y_train, epochs=20, batch_size=32, validation_split=0.1, verbose=1)
-    y_pred_transformer = transformer_model.predict(X_test).flatten()
+            # Station-level Evaluation and Plotting
+            for station, data in station_test_data.items():
+                s_X_test = data['X_test']
+                s_y_test = data['y_test']
 
-    # 6. Evaluation
-    results = []
+                if len(s_y_test) == 0:
+                    continue
 
-    models = {
-        'Random Forest': y_pred_rf,
-        'LSTM': y_pred_lstm,
-        'Transformer': y_pred_transformer
-    }
+                s_X_test_flat = s_X_test.reshape(s_X_test.shape[0], -1)
 
-    for name, y_pred in models.items():
-        r2 = r2_score(y_test, y_pred)
-        mae = mean_absolute_error(y_test, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        results.append({'Model': name, 'R2': r2, 'MAE': mae, 'RMSE': rmse})
+                # Predictions
+                y_pred_rf = rf_model.predict(s_X_test_flat)
+                y_pred_lstm = lstm_model.predict(s_X_test, verbose=0).flatten()
+                y_pred_transformer = transformer_model.predict(s_X_test, verbose=0).flatten()
 
-    results_df = pd.DataFrame(results)
-    print("\nResults Summary:")
-    print(results_df)
-    results_df.to_csv('results_summary.csv', index=False)
+                models = {
+                    'Random Forest': y_pred_rf,
+                    'LSTM': y_pred_lstm,
+                    'Transformer': y_pred_transformer
+                }
 
-    # 7. Visualization (Kathmandu Airport)
-    # Predict for Kathmandu
-    kath_pred_rf = rf_model.predict(kath_X_flat)
-    kath_pred_lstm = lstm_model.predict(kath_X).flatten()
-    kath_pred_transformer = transformer_model.predict(kath_X).flatten()
+                # Metrics Collection
+                for model_name, preds in models.items():
+                    r2, mae, mse, rmse, rrmse = evaluate_metrics(s_y_test, preds)
+                    all_results.append({
+                        'Station': station,
+                        'SPEI': f'SPEI-{spei_win}',
+                        'Lead Time': f'Lead {lead_time}',
+                        'Model': model_name,
+                        'MAE': mae,
+                        'MSE': mse,
+                        'RMSE': rmse,
+                        'RRMSE (%)': rrmse,
+                        'R2': r2
+                    })
 
-    plt.figure(figsize=(12, 6))
-    plt.plot(kath_y, label='Actual', color='black', linewidth=2)
-    plt.plot(kath_pred_rf, label='Random Forest', linestyle='--')
-    plt.plot(kath_pred_lstm, label='LSTM', linestyle='--')
-    plt.plot(kath_pred_transformer, label='Transformer', linestyle='--')
+                # Plotting (only predicted portion / test set)
+                plt.figure(figsize=(10, 5))
+                plt.plot(s_y_test, label='Actual', color='black', linewidth=2)
+                plt.plot(y_pred_rf, label='Random Forest', linestyle='--')
+                plt.plot(y_pred_lstm, label='LSTM', linestyle='-.')
+                plt.plot(y_pred_transformer, label='Transformer', linestyle=':')
 
-    plt.title('Drought Forecasting: Predicted vs Actual (Kathmandu Airport)')
-    plt.xlabel('Time Steps (Months)')
-    plt.ylabel('SPEI1_lead30')
-    plt.legend()
-    plt.grid(True)
-    plt.savefig('kathmandu_comparison.png')
-    print("Visualization saved as kathmandu_comparison.png")
+                plt.title(f'{station} - SPEI-{spei_win} Lead {lead_time}')
+                plt.xlabel('Test Time Steps (Months)')
+                plt.ylabel(f'SPEI-{spei_win} Lead {lead_time}')
+                plt.legend()
+                plt.grid(True)
+
+                # Save plot
+                target_plot_dir = os.path.join('output', 'plots', f'SPEI-{spei_win}_Lead_{lead_time}')
+                os.makedirs(target_plot_dir, exist_ok=True)
+                plot_filename = os.path.join(target_plot_dir, f'{station}.png')
+                plt.savefig(plot_filename)
+                plt.close()
+
+    results_df = pd.DataFrame(all_results)
+    results_df.to_csv('output/performance_parameters.csv', index=False)
+    print("Done! Metrics saved to 'output/performance_parameters.csv' and plots saved to 'output/plots/' directory.")
 
 if __name__ == "__main__":
     main()
