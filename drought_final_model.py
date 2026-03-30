@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import os
 import glob
+import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
@@ -254,6 +255,13 @@ def main():
     plt.grid(True)
     plt.savefig('kathmandu_comparison.png')
     print("Visualization saved as kathmandu_comparison.png")
+
+    # Save models and scaler
+    joblib.dump(scaler, 'scaler.pkl')
+    joblib.dump(rf_model, 'rf_model.pkl')
+    lstm_model.save('lstm_model.keras')
+    transformer_model.save('transformer_model.keras')
+    print("Models and scaler saved successfully.")
 
 if __name__ == "__main__":
     main()
