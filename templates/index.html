@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drought Forecasting Ensemble</title>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; margin: 0; padding: 20px; background: #f4f4f4; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .transparency-section { background: #e9ecef; padding: 15px; border-left: 4px solid #007bff; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        input { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
+        button { padding: 10px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; font-size: 1.1em; }
+        button:hover { background: #0056b3; }
+        .results-section { margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; display: none; }
+        .prediction-cards { display: flex; justify-content: space-between; gap: 15px; flex-wrap: wrap; }
+        .card { background: #f8f9fa; padding: 15px; border-radius: 4px; text-align: center; flex: 1; border: 1px solid #dee2e6; min-width: 150px; }
+        .score { font-size: 1.5em; font-weight: bold; color: #28a745; margin: 10px 0 0; }
+        h1, h3 { color: #333; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Drought Forecasting Model</h1>
+        <p>Predicting SPEI1_lead30 using a Multi-Model Ensemble</p>
+
+        <div class="transparency-section">
+            <h3>Model Architecture Transparency</h3>
+            <p>This system utilizes a robust ensemble of three distinct Machine Learning architectures to forecast short-term drought conditions:</p>
+            <ul>
+                <li><strong>Transformer (Multi-Head Attention):</strong> Captures complex, long-range dependencies in the meteorological time-series data.</li>
+                <li><strong>LSTM (Long Short-Term Memory):</strong> A specialized Recurrent Neural Network adept at learning sequential patterns and temporal dynamics.</li>
+                <li><strong>Random Forest:</strong> An ensemble decision tree algorithm providing a strong baseline and non-linear feature interaction capabilities.</li>
+            </ul>
+        </div>
+
+        <form id="predictionForm">
+            <div class="form-group">
+                <label for="precipitation">Precipitation (mm):</label>
+                <input type="number" step="0.1" id="precipitation" required value="15.2">
+            </div>
+            <div class="form-group">
+                <label for="tmean">Mean Temp (°C):</label>
+                <input type="number" step="0.1" id="tmean" required value="22.5">
+            </div>
+            <div class="form-group">
+                <label for="pet">PET:</label>
+                <input type="number" step="0.1" id="pet" required value="4.8">
+            </div>
+            <div class="form-group">
+                <label for="wb">Water Balance (WB):</label>
+                <input type="number" step="0.1" id="wb" required value="10.4">
+            </div>
+            <button type="submit">Run Prediction</button>
+        </form>
+
+        <div id="results" class="results-section">
+            <h3>Ensemble Predictions</h3>
+            <p>Target: <span id="targetName" style="font-weight:bold;">--</span></p>
+            <div class="prediction-cards">
+                <div class="card">
+                    <h4>Transformer</h4>
+                    <p id="predTransformer" class="score">--</p>
+                </div>
+                <div class="card">
+                    <h4>LSTM</h4>
+                    <p id="predLSTM" class="score">--</p>
+                </div>
+                <div class="card">
+                    <h4>Random Forest</h4>
+                    <p id="predRF" class="score">--</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/script.js"></script>
+</body>
+</html>
