@@ -6,20 +6,23 @@ import pickle
 from tensorflow.keras.models import load_model
 import os
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app = Flask(__name__,
+            template_folder=os.path.join(BASE_DIR, 'templates'),
+            static_folder=os.path.join(BASE_DIR, 'static'))
 CORS(app)
 
 # Load the scaler and models
-with open('scaler.pkl', 'rb') as f:
+with open(os.path.join(BASE_DIR, 'scaler.pkl'), 'rb') as f:
     scaler = pickle.load(f)
-with open('rf_model.pkl', 'rb') as f:
+with open(os.path.join(BASE_DIR, 'rf_model.pkl'), 'rb') as f:
     rf_model = pickle.load(f)
 
-lstm_model = load_model('lstm_model.keras')
-transformer_model = load_model('transformer_model.keras')
+lstm_model = load_model(os.path.join(BASE_DIR, 'lstm_model.keras'))
+transformer_model = load_model(os.path.join(BASE_DIR, 'transformer_model.keras'))
 
 try:
-    history_df = pd.read_csv('data/Kathmandu_Airport.csv')
+    history_df = pd.read_csv(os.path.join(BASE_DIR, 'data', 'Kathmandu_Airport.csv'))
     history_df = history_df[['Precipitation', 'Tmean', 'PET', 'WB']].tail(23).reset_index(drop=True)
 except Exception as e:
     print(f"Failed to load history data: {e}")
